@@ -1,3 +1,5 @@
+![Banner](https://github.com/theWinterDojer/kodi-backup-tool/public/banner.png?raw=true)
+
 # Kodi Backup Tool
 
 Cross-platform GUI application for backing up and restoring Kodi installations. Provides automated cache cleanup, backup creation, and restore functionality through a unified interface.
