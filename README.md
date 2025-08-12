@@ -1,4 +1,4 @@
-![Banner](https://github.com/theWinterDojer/kodi-backup-tool/public/banner.png?raw=true)
+![Banner](https://github.com/theWinterDojer/kodi-backup-tool/blob/main/public/banner.png?raw=true)
 
 # Kodi Backup Tool
 
