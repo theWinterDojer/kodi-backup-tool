@@ -6,7 +6,7 @@ Cross-platform GUI application for backing up and restoring Kodi installations. 
 
 ## Download
 
-**[Download Latest Release](https://github.com/YOUR_USERNAME/kodi-backup-tool/releases/latest)**
+**[Download Latest Release](https://github.com/theWinterDojer/kodi-backup-tool/releases/latest)**
 
 The standalone executable requires no installation or Python dependencies.
 
