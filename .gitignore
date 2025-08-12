@@ -57,6 +57,7 @@ kodi_backup_config.json
 # Development artifacts
 *.old/
 docs/
+images/
 pre-restore-option.old/
 *.bak
 *.tmp
