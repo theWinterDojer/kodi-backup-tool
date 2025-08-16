@@ -47,6 +47,7 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+*.bat
 
 # Application-specific
 kodi_backup_config.json
