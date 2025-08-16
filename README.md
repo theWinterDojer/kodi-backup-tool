@@ -2,17 +2,19 @@
 
 # Kodi Backup Tool
 
-Cross-platform GUI application for backing up and restoring Kodi installations. Provides automated cache cleanup, backup creation, and restore functionality through a unified interface.
+Portable GUI application for backing up and restoring Kodi installations. Provides automated cache cleanup, backup creation, and restore functionality.
 
 ## Download
 
-**[Download Latest Release](https://github.com/theWinterDojer/kodi-backup-tool/releases/latest)**
+### Windows Users
+**[Download Windows Executable](https://github.com/theWinterDojer/kodi-backup-tool/releases/latest)** - No installation or Python required
 
-The standalone executable requires no installation or Python dependencies.
+### macOS & Linux Users
+Install Python 3.8+ and run from source (see Installation section below)
 
 ## Features
 
-- Cross-platform support (Windows, macOS, Linux)
+- Windows executable available for easy deployment
 - GUI interface using CustomTkinter
 - Automated cache cleanup to reduce backup size
 - ZIP compression with configurable settings
@@ -20,19 +22,25 @@ The standalone executable requires no installation or Python dependencies.
 - Persistent configuration storage
 - Progress tracking and status reporting
 
-## Requirements
+## Installation
 
+### Option 1: Windows Executable (Recommended for Windows)
+1. Download the `.exe` file from the [releases page](https://github.com/theWinterDojer/kodi-backup-tool/releases/latest)
+2. Run `Kodi-Backup-Tool.exe` - no installation required
+
+### Option 2: Run from Source (Windows, macOS, Linux)
+
+**Requirements:**
 - Python 3.8+
 - Dependencies listed in requirements.txt
 
-## Installation
-
-1. Install dependencies:
+**Steps:**
+1. Clone or download the repository
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-
-2. Run the application:
+3. Run the application:
    ```bash
    python main.py
    ```
@@ -112,15 +120,24 @@ Application settings are stored in `kodi_backup_config.json` in the application 
 
 Note: Optional cleanup settings reset to false on each application launch for safety.
 
-## Executable Distribution
+## Building Platform-Specific Executables
 
-Create standalone executable using PyInstaller:
+To create a standalone executable for your platform using PyInstaller:
 
 ```bash
+# Install PyInstaller first
+pip install PyInstaller
+
+# Create executable (run on the target platform)
 python -m PyInstaller --onefile --windowed --icon=icon.ico --name "Kodi-Backup-Tool" main.py
 ```
 
-The resulting executable is fully portable and includes all dependencies.
+**Important Notes:**
+- The executable will only run on the platform where it was built
+- Windows executable (`.exe`) only works on Windows
+- macOS executable only works on macOS  
+- Linux executable only works on Linux
+- For cross-platform distribution, build on each target platform separately
 
 ## Architecture
 

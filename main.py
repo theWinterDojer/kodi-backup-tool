@@ -113,7 +113,7 @@ class KodiBackupApp:
         
         subtitle_label = ctk.CTkLabel(
             header_frame, 
-            text="Cross-platform cleaning, backup and restore solution",
+            text="All-in-one backup, cleaning and restore solution",
             font=ctk.CTkFont(size=12)
         )
         subtitle_label.pack(pady=(0, 10))
