@@ -9,7 +9,7 @@ import shutil
 import zipfile
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Callable, Dict, List, Tuple
+from typing import Optional, Callable, Dict, Tuple
 
 
 class KodiBackupEngine:
@@ -55,53 +55,6 @@ class KodiBackupEngine:
         self._update_progress(f"Valid Kodi directory found: {kodi_path}")
         return True
     
-    def calculate_directory_size(self, directory_path: str) -> int:
-        """
-        Calculate total size of directory and all subdirectories.
-        
-        Args:
-            directory_path: Path to directory
-            
-        Returns:
-            Total size in bytes
-        """
-        total_size = 0
-        dir_path = Path(directory_path)
-        
-        if not dir_path.exists():
-            return 0
-            
-        try:
-            for file_path in dir_path.rglob('*'):
-                if file_path.is_file():
-                    try:
-                        total_size += file_path.stat().st_size
-                    except (OSError, IOError):
-                        # Skip files we can't access
-                        continue
-        except (OSError, IOError):
-            # Skip directories we can't access
-            pass
-            
-        return total_size
-    
-    def calculate_kodi_size(self, kodi_path: str) -> Tuple[int, int]:
-        """
-        Calculate size of userdata and addons directories.
-        
-        Args:
-            kodi_path: Path to Kodi installation
-            
-        Returns:
-            Tuple of (userdata_size, addons_size) in bytes
-        """
-        kodi_dir = Path(kodi_path)
-        
-        userdata_size = self.calculate_directory_size(str(kodi_dir / "userdata"))
-        addons_size = self.calculate_directory_size(str(kodi_dir / "addons"))
-        
-        return userdata_size, addons_size
-    
     def format_size(self, size_bytes: int) -> str:
         """
         Format size in bytes to human-readable format.
@@ -121,7 +74,7 @@ class KodiBackupEngine:
         else:
             return f"{size_bytes/(1024**3):.2f} GB"
     
-    def cleanup_cache_files(self, kodi_path: str, cleanup_settings: Dict[str, bool] = None) -> Dict[str, bool]:
+    def cleanup_cache_files(self, kodi_path: str, cleanup_settings: Dict[str, bool] = None) -> Tuple[Dict[str, bool], int]:
         """
         Clean up cache and temporary files to reduce backup size.
         Based on the original batch script cleanup logic.
@@ -131,7 +84,7 @@ class KodiBackupEngine:
             cleanup_settings: Dict of cleanup options (None = use defaults)
             
         Returns:
-            Dictionary with cleanup results for each operation
+            Tuple of (cleanup_results_dict, total_space_freed_bytes)
         """
         # Default cleanup settings (matches batch script enabled operations)
         if cleanup_settings is None:
@@ -147,6 +100,7 @@ class KodiBackupEngine:
             }
         
         results = {}
+        total_space_freed = 0
         kodi_dir = Path(kodi_path)
         
         # Define all cleanup targets (both default and optional)
@@ -204,6 +158,10 @@ class KodiBackupEngine:
         
         self._update_progress("Cleaning cache/temp folders...")
         
+        # Give user time to see what's happening
+        import time
+        time.sleep(2)
+        
         # Process cleanup targets based on settings
         for key, target in all_cleanup_targets.items():
             if not cleanup_settings.get(key, False):
@@ -213,13 +171,32 @@ class KodiBackupEngine:
                 
             try:
                 if target['path'].exists():
+                    # Calculate size before deletion
+                    size_freed = 0
                     if target['is_directory']:
+                        # Use fast size calculation for directories
+                        try:
+                            for root, dirs, files in os.walk(target['path']):
+                                for file in files:
+                                    try:
+                                        file_path = os.path.join(root, file)
+                                        size_freed += os.path.getsize(file_path)
+                                    except (OSError, IOError):
+                                        continue
+                        except (OSError, IOError):
+                            pass
                         shutil.rmtree(target['path'])
                     else:
+                        try:
+                            size_freed = target['path'].stat().st_size
+                        except (OSError, IOError):
+                            size_freed = 0
                         target['path'].unlink()
                     
+                    total_space_freed += size_freed
                     results[target['name']] = True
                     self._update_progress(f"Deleted {target['description']}")
+                    time.sleep(0.5)  # Pause after successful deletion
                 else:
                     results[target['name']] = False
                     self._update_progress(f"Skipped {target['description']} (not found)")
@@ -228,8 +205,15 @@ class KodiBackupEngine:
                 results[target['name']] = False
                 self._update_progress(f"Failed to delete {target['description']}: {e}")
         
+        # Create cleanup summary
+        items_cleaned = sum(1 for success in results.values() if success)
+        total_items = len(results)
+        
         self._update_progress("Cache cleanup complete")
-        return results
+        self._update_progress("")
+        self._update_progress(f"Cleanup Summary: {items_cleaned}/{total_items} items cleaned, {self.format_size(total_space_freed)} freed")
+        
+        return results, total_space_freed
     
     def create_backup_filename(self, label: str = "backup") -> str:
         """
@@ -245,7 +229,7 @@ class KodiBackupEngine:
         return f"kodi.bkup_{date_str}_{label}.zip"
     
     def create_backup_archive(self, kodi_path: str, backup_destination: str, 
-                            filename: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> bool:
+                            filename: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[bool, int]:
         """
         Create compressed backup archive of Kodi installation.
         
@@ -256,7 +240,7 @@ class KodiBackupEngine:
             progress_callback: Optional callback for progress updates (current_files, total_files)
             
         Returns:
-            True if backup successful, False otherwise
+            Tuple of (success_boolean, total_uncompressed_size_bytes)
         """
         kodi_dir = Path(kodi_path)
         backup_dir = Path(backup_destination)
@@ -271,57 +255,52 @@ class KodiBackupEngine:
             kodi_dir / "addons"
         ]
         
-        # Count total files for progress tracking
-        total_files = 0
-        file_list = []
-        
-        for backup_dir_path in backup_dirs:
-            if backup_dir_path.exists():
-                for file_path in backup_dir_path.rglob('*'):
-                    if file_path.is_file():
-                        # Store relative path for archive
-                        rel_path = file_path.relative_to(kodi_dir)
-                        file_list.append((file_path, rel_path))
-                        total_files += 1
-        
         self._update_progress(f"Creating backup with compression...")
         self._update_progress(f"Output: {filename}")
         self._update_progress("")
-        self._update_progress(f"Compressing {total_files} files...")
-        
-        # Initialize progress at start of compression
-        if progress_callback:
-            progress_callback(0, total_files)
         
         try:
-            with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
+            total_uncompressed_size = 0
+            with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as zipf:
                 current_file = 0
+                last_progress_update = 0
                 
-                for file_path, archive_path in file_list:
-                    try:
-                        zipf.write(file_path, archive_path)
-                        current_file += 1
+                for backup_dir_path in backup_dirs:
+                    if backup_dir_path.exists():
+                        dir_name = backup_dir_path.name
+                        self._update_progress(f"Backing up {dir_name} directory...")
                         
-                        # Update progress bar every 100 files or at completion (no status spam)
-                        if current_file % 100 == 0 or current_file == total_files:
-                            if progress_callback:
-                                progress_callback(current_file, total_files)
-                                
-                    except Exception as e:
-                        self._update_progress(f"Warning: Could not backup file {file_path}: {e}")
-                        continue
+                        # Use os.walk for better network performance - single traversal
+                        for root, dirs, files in os.walk(backup_dir_path):
+                            for file in files:
+                                try:
+                                    file_path = os.path.join(root, file)
+                                    # Get file size before adding to archive
+                                    file_size = os.path.getsize(file_path)
+                                    total_uncompressed_size += file_size
+                                    
+                                    # Calculate relative path for archive
+                                    rel_path = os.path.relpath(file_path, kodi_path)
+                                    zipf.write(file_path, rel_path)
+                                    current_file += 1
+                                    
+                                    # Show progress every 1000 files to give user feedback without spam
+                                    if current_file - last_progress_update >= 1000:
+                                        self._update_progress(f"Processing... {current_file} files archived")
+                                        last_progress_update = current_file
+                                        
+                                except Exception as e:
+                                    # Silently skip problem files
+                                    continue
             
             # Get final backup size
             backup_size = backup_file.stat().st_size
-            self._update_progress("")
-            self._update_progress(f"Backup complete! File: {filename}  Size: {self.format_size(backup_size)}")
-            self._update_progress(f"Saved to: {backup_file}")
             
-            return True
+            return True, total_uncompressed_size
             
         except Exception as e:
             self._update_progress(f"ERROR: Failed to create backup archive: {e}")
-            return False
+            return False, 0
     
     def perform_full_backup(self, kodi_path: str, backup_destination: str, 
                           label: str = "backup", archive_progress_callback: Optional[Callable[[int, int], None]] = None,
@@ -354,42 +333,19 @@ class KodiBackupEngine:
                 results['error_message'] = "Invalid Kodi directory"
                 return results
             
-            # Step 2: Calculate size before cleanup
-            self._update_progress("=" * 20 + " SIZE BEFORE CLEANUP " + "=" * 20)
-            self._update_progress("Measuring size of Kodi Userdata and Addons BEFORE cleanup...")
-            userdata_before, addons_before = self.calculate_kodi_size(kodi_path)
-            total_before = userdata_before + addons_before
-            results['size_before_cleanup'] = total_before
-            self._update_progress(f"Current size: {self.format_size(total_before)}")
-            self._update_progress("")
-            
-            # Step 3: Cleanup cache files
+            # Step 2: Cleanup cache files (with space tracking)
             self._update_progress("=" * 25 + " CLEANUP " + "=" * 25)
-            cleanup_results = self.cleanup_cache_files(kodi_path, cleanup_settings)
+            cleanup_results, space_freed = self.cleanup_cache_files(kodi_path, cleanup_settings)
             results['cleanup_results'] = cleanup_results
-            self._update_progress("")
-            
-            # Step 4: Calculate size after cleanup
-            self._update_progress("=" * 20 + " SIZE AFTER CLEANUP " + "=" * 20)
-            self._update_progress("Measuring size AFTER cleanup...")
-            userdata_after, addons_after = self.calculate_kodi_size(kodi_path)
-            total_after = userdata_after + addons_after
-            results['size_after_cleanup'] = total_after
-            
-            space_freed = total_before - total_after
             results['space_freed'] = space_freed
             
-            self._update_progress(f"Space freed: {self.format_size(space_freed)}")
-            self._update_progress(f"Size to backup: {self.format_size(total_after)}")
-            self._update_progress("")
-            
-            # Step 5: Create backup filename
+            # Step 3: Create backup filename
             filename = self.create_backup_filename(label)
             results['filename'] = filename
             
-            # Step 6: Create backup archive
+            # Step 4: Create backup archive (with size tracking)
             self._update_progress("=" * 22 + " BACKUP ARCHIVE " + "=" * 22)
-            backup_success = self.create_backup_archive(kodi_path, backup_destination, filename, archive_progress_callback)
+            backup_success, total_uncompressed_size = self.create_backup_archive(kodi_path, backup_destination, filename, archive_progress_callback)
             
             if backup_success:
                 # Get final backup file size
@@ -397,8 +353,12 @@ class KodiBackupEngine:
                 if backup_file.exists():
                     results['final_backup_size'] = backup_file.stat().st_size
                 
+                # Calculate derived values for summary
+                # Original size = what we actually backed up + what we cleaned up
+                results['size_before_cleanup'] = total_uncompressed_size + space_freed
+                results['size_after_cleanup'] = total_uncompressed_size
+                
                 results['success'] = True
-                self._update_progress("Backup completed successfully!")
             else:
                 results['error_message'] = "Failed to create backup archive"
                 

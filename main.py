@@ -24,7 +24,7 @@ class KodiBackupApp:
     def __init__(self):
         # Create main window
         self.root = ctk.CTk()
-        self.root.title("Kodi Backup Tool v1.1")
+        self.root.title("Kodi Backup Tool v1.2")
         self.root.geometry("550x730")
         self.root.minsize(500, 570)
         
