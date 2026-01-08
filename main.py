@@ -24,7 +24,7 @@ class KodiBackupApp:
     def __init__(self):
         # Create main window
         self.root = ctk.CTk()
-        self.root.title("Kodi Backup Tool v1.2")
+        self.root.title("Kodi Backup Tool v1.3")
         self.root.geometry("550x730")
         self.root.minsize(500, 570)
         
@@ -347,8 +347,8 @@ INSTRUCTIONS:
             self.update_status(f"Error saving config: {e}")
             return False
     
-    def _confirm_kodi_closed(self):
-        """Confirm that Kodi is closed before backup"""
+    def _confirm_kodi_closed(self, action: str = "backup"):
+        """Confirm that Kodi is closed before backup/restore"""
         import tkinter.messagebox as msgbox
         
         # Match the exact message from the batch script
@@ -366,11 +366,8 @@ INSTRUCTIONS:
         )
         
         if result:
-            self.update_status("KODI CONFIRMATION\n\nUser confirmed Kodi is closed. Proceeding with backup...")
             return True
-        else:
-            self.update_status("BACKUP CANCELED\n\nPlease close Kodi and try again.")
-            return False
+        return False
         
     def browse_kodi_directory(self):
         """Browse for Kodi directory"""
@@ -432,7 +429,7 @@ INSTRUCTIONS:
             
         kodi_path = self.kodi_path_entry.get().strip()
         backup_path = self.backup_path_entry.get().strip()
-        label = self.label_entry.get().strip() or "backup"
+        label = self.label_entry.get().strip()
         
         if not kodi_path or not backup_path:
             error_msg = """ERROR: MISSING PATHS
@@ -446,7 +443,7 @@ Both paths are required to continue."""
             return
         
         # IMPORTANT: Kodi must be closed before backup 
-        if not self._confirm_kodi_closed():
+        if not self._confirm_kodi_closed("backup"):
             return
         
         # Validate paths exist
@@ -737,12 +734,18 @@ Please check the error and try again."""
             self.update_status(f"RESTORE ERROR\n\nBackup file not found:\n{backup_file}")
             return
         
-        if not Path(target_dir).exists():
-            self.update_status(f"RESTORE ERROR\n\nTarget directory not found:\n{target_dir}")
-            return
+        target_path = Path(target_dir)
+        if target_path.exists():
+            if not target_path.is_dir():
+                self.update_status(f"RESTORE ERROR\n\nTarget path is not a directory:\n{target_dir}")
+                return
+        else:
+            self.update_status(
+                f"RESTORE NOTICE\n\nRestore target does not exist yet; it will be created during restore.\n{target_dir}"
+            )
         
         # IMPORTANT: Kodi must be closed before restore
-        if not self._confirm_kodi_closed():
+        if not self._confirm_kodi_closed("restore"):
             return
         
         # Save the selected backup file as the new last_backup_file
@@ -798,7 +801,10 @@ Your Kodi backup has been restored!
 Restart Kodi to use the restored configuration."""
             
         else:
-            summary_msg = f"""RESTORE FAILED
+            if results.get('error_logged'):
+                summary_msg = "RESTORE FAILED\n\nPlease check the status messages above for details."
+            else:
+                summary_msg = f"""RESTORE FAILED
 
 Error Details:
 {results['error_message']}

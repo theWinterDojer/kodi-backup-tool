@@ -5,6 +5,7 @@ Converts the Windows batch script logic to Python for cross-platform compatibili
 """
 
 import os
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -44,15 +45,15 @@ class KodiBackupEngine:
         """
         kodi_dir = Path(kodi_path)
         
-        # Check if userdata directory exists (key indicator of Kodi installation)
+        # Check if userdata and addons directories exist (key indicators of Kodi installation)
         userdata_path = kodi_dir / "userdata"
         addons_path = kodi_dir / "addons"
         
-        if not userdata_path.exists():
-            self._update_progress(f"ERROR: Invalid Kodi directory - userdata folder not found: {kodi_path}")
+        if not userdata_path.exists() or not addons_path.exists():
+            self._update_progress("ERROR: Invalid Kodi directory: missing userdata/ and/or addons/")
             return False
             
-        self._update_progress(f"Valid Kodi directory found: {kodi_path}")
+        self._update_progress(f"✓ Valid Kodi directory found: {kodi_path}")
         return True
     
     def format_size(self, size_bytes: int) -> str:
@@ -73,6 +74,66 @@ class KodiBackupEngine:
             return f"{size_bytes/(1024**2):.2f} MB"
         else:
             return f"{size_bytes/(1024**3):.2f} GB"
+
+    def _log_remaining_contents(self, target_path: Path, kodi_dir: Path, limit: int = 10) -> None:
+        """Log remaining files when cleanup fails due to non-empty directory."""
+        remaining_paths = []
+        total_files = 0
+
+        try:
+            for root, dirs, files in os.walk(target_path):
+                for file in files:
+                    total_files += 1
+                    if len(remaining_paths) < limit:
+                        file_path = os.path.join(root, file)
+                        try:
+                            rel_path = os.path.relpath(file_path, kodi_dir)
+                        except ValueError:
+                            rel_path = file_path
+                        remaining_paths.append(rel_path)
+        except Exception as e:
+            self._update_progress(f"Could not list remaining files: {e}")
+            return
+
+        self._update_progress(f"Remaining files: {total_files}")
+        for rel_path in remaining_paths:
+            self._update_progress(f"Remaining: {rel_path}")
+
+    def _is_drive_root(self, target_dir: Path) -> bool:
+        """Return True if target_dir is a drive root (e.g., C:\\ or /)."""
+        try:
+            resolved_target = target_dir.resolve()
+        except Exception:
+            resolved_target = target_dir
+
+        anchor = resolved_target.anchor
+        if anchor:
+            resolved_str = str(resolved_target).rstrip("\\/")
+            anchor_str = anchor.rstrip("\\/")
+            if resolved_str == anchor_str:
+                return True
+
+        return resolved_target.parent == resolved_target or len(resolved_target.parts) <= 1
+
+    def _is_safe_zip_member(self, target_dir: Path, member_name: str) -> bool:
+        """Return True if zip member path is safe to extract within target_dir."""
+        if not member_name:
+            return False
+
+        normalized = member_name.replace("\\", "/")
+        if normalized.startswith("/") or normalized.startswith("\\"):
+            return False
+        if re.match(r"^[A-Za-z]:", normalized):
+            return False
+
+        target_abs = os.path.normcase(os.path.abspath(str(target_dir)))
+        member_abs = os.path.normcase(os.path.abspath(os.path.join(target_abs, normalized)))
+        try:
+            common = os.path.commonpath([target_abs, member_abs])
+        except ValueError:
+            return False
+
+        return common == target_abs
     
     def cleanup_cache_files(self, kodi_path: str, cleanup_settings: Dict[str, bool] = None) -> Tuple[Dict[str, bool], int]:
         """
@@ -166,7 +227,6 @@ class KodiBackupEngine:
         for key, target in all_cleanup_targets.items():
             if not cleanup_settings.get(key, False):
                 results[target['name']] = False
-                self._update_progress(f"Skipped {target['description']} (disabled in settings)")
                 continue
                 
             try:
@@ -199,11 +259,16 @@ class KodiBackupEngine:
                     time.sleep(0.5)  # Pause after successful deletion
                 else:
                     results[target['name']] = False
-                    self._update_progress(f"Skipped {target['description']} (not found)")
+                    self._update_progress(f"Not present: {target['description']} (nothing to delete)")
                     
             except Exception as e:
                 results[target['name']] = False
                 self._update_progress(f"Failed to delete {target['description']}: {e}")
+                if target['is_directory'] and key in ("tmdb_blur", "tmdb_crop"):
+                    winerror = getattr(e, "winerror", None)
+                    errno = getattr(e, "errno", None)
+                    if winerror == 145 or errno == 145:
+                        self._log_remaining_contents(target['path'], kodi_dir)
         
         # Create cleanup summary
         items_cleaned = sum(1 for success in results.values() if success)
@@ -226,7 +291,28 @@ class KodiBackupEngine:
             Formatted filename (e.g., "kodi.bkup_2024-01-15_Umbrella+AF2.zip")
         """
         date_str = datetime.now().strftime("%Y-%m-%d")
-        return f"kodi.bkup_{date_str}_{label}.zip"
+        if not label:
+            return f"kodi.bkup_{date_str}.zip"
+
+        clean_label = self.sanitize_label(label)
+        return f"kodi.bkup_{date_str}_{clean_label}.zip"
+
+    def sanitize_label(self, label: str) -> str:
+        """
+        Sanitize backup label to produce a safe filename component.
+        """
+        if not label:
+            return "backup"
+
+        cleaned = label.strip()
+        if not cleaned:
+            return "backup"
+
+        cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", cleaned)
+        cleaned = re.sub(r"_+", "_", cleaned)
+        cleaned = cleaned[:50]
+
+        return cleaned if cleaned else "backup"
     
     def create_backup_archive(self, kodi_path: str, backup_destination: str, 
                             filename: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[bool, int]:
@@ -254,13 +340,21 @@ class KodiBackupEngine:
             kodi_dir / "userdata",
             kodi_dir / "addons"
         ]
+
+        total_files = 0
+        for backup_dir_path in backup_dirs:
+            if backup_dir_path.exists():
+                for _, _, files in os.walk(backup_dir_path):
+                    total_files += len(files)
         
-        self._update_progress(f"Creating backup with compression...")
+        self._update_progress(f"Creating backup archive...")
         self._update_progress(f"Output: {filename}")
         self._update_progress("")
         
         try:
             total_uncompressed_size = 0
+            skipped_files_count = 0
+            skipped_examples = []
             with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as zipf:
                 current_file = 0
                 last_progress_update = 0
@@ -273,28 +367,35 @@ class KodiBackupEngine:
                         # Use os.walk for better network performance - single traversal
                         for root, dirs, files in os.walk(backup_dir_path):
                             for file in files:
+                                file_path = os.path.join(root, file)
+                                rel_path = os.path.relpath(file_path, kodi_path)
+                                arcname = rel_path.replace("\\", "/")
                                 try:
-                                    file_path = os.path.join(root, file)
                                     # Get file size before adding to archive
                                     file_size = os.path.getsize(file_path)
-                                    total_uncompressed_size += file_size
                                     
                                     # Calculate relative path for archive
-                                    rel_path = os.path.relpath(file_path, kodi_path)
-                                    zipf.write(file_path, rel_path)
+                                    zipf.write(file_path, arcname)
+                                    total_uncompressed_size += file_size
                                     current_file += 1
                                     
                                     # Show progress every 1000 files to give user feedback without spam
                                     if current_file - last_progress_update >= 1000:
-                                        self._update_progress(f"Processing... {current_file} files archived")
+                                        self._update_progress(f"Processing... {current_file}/{total_files} files archived")
+                                        if progress_callback:
+                                            progress_callback(current_file, total_files)
                                         last_progress_update = current_file
                                         
                                 except Exception as e:
-                                    # Silently skip problem files
+                                    skipped_files_count += 1
+                                    if len(skipped_examples) < 10:
+                                        skipped_examples.append((arcname, str(e)))
                                     continue
             
-            # Get final backup size
-            backup_size = backup_file.stat().st_size
+            self._update_progress(f"ZIP creation completed with {skipped_files_count} skipped files")
+            if skipped_files_count > 0:
+                for rel_path, error_message in skipped_examples:
+                    self._update_progress(f"Skipped: {rel_path} ({error_message})")
             
             return True, total_uncompressed_size
             
@@ -383,7 +484,8 @@ class KodiBackupEngine:
             'error_message': '',
             'userdata_files': 0,
             'addons_files': 0,
-            'total_size': 0
+            'total_size': 0,
+            'error_logged': False
         }
         
         backup_file = Path(backup_file_path)
@@ -400,22 +502,21 @@ class KodiBackupEngine:
             # Check if it's a valid ZIP file and contains required structure
             with zipfile.ZipFile(backup_file, 'r') as zipf:
                 file_list = zipf.namelist()
+                normalized_list = [name.replace("\\", "/") for name in file_list]
                 
                 # Check for required directories
-                has_userdata = any(f.startswith('userdata/') for f in file_list)
-                has_addons = any(f.startswith('addons/') for f in file_list)
+                has_userdata = any(f.split('/', 1)[0] == 'userdata' for f in normalized_list)
+                has_addons = any(f.split('/', 1)[0] == 'addons' for f in normalized_list)
                 
-                if not has_userdata:
-                    results['error_message'] = "Backup file does not contain userdata directory"
-                    return results
-                
-                if not has_addons:
-                    results['error_message'] = "Backup file does not contain addons directory"
+                if not has_userdata or not has_addons:
+                    results['error_message'] = "Backup file does not contain required directories: userdata/ and/or addons/"
+                    self._update_progress(f"ERROR: {results['error_message']}")
+                    results['error_logged'] = True
                     return results
                 
                 # Count files in each directory
-                results['userdata_files'] = sum(1 for f in file_list if f.startswith('userdata/') and not f.endswith('/'))
-                results['addons_files'] = sum(1 for f in file_list if f.startswith('addons/') and not f.endswith('/'))
+                results['userdata_files'] = sum(1 for f in normalized_list if f.startswith('userdata/') and not f.endswith('/'))
+                results['addons_files'] = sum(1 for f in normalized_list if f.startswith('addons/') and not f.endswith('/'))
                 
                 # Get total uncompressed size
                 results['total_size'] = sum(info.file_size for info in zipf.infolist() if not info.is_dir())
@@ -479,40 +580,53 @@ class KodiBackupEngine:
         
         try:
             with zipfile.ZipFile(backup_file, 'r') as zipf:
-                file_list = zipf.namelist()
-                total_files = len([f for f in file_list if not f.endswith('/')])
+                total_files = sum(1 for zi in zipf.infolist() if not zi.is_dir())
                 
+                self._update_progress(f"Extracting {total_files} items...")
                 self._update_progress(f"Extracting backup archive...")
-                self._update_progress(f"Restoring userdata files...")
                 
                 extracted_files = 0
-                userdata_files = 0
-                addons_files = 0
+                skipped_files_count = 0
+                userdata_banner_shown = False
+                addons_banner_shown = False
+                progress_interval = 1000
                 
                 for file_info in zipf.infolist():
                     if file_info.is_dir():
                         continue
-                        
+
+                    name = file_info.filename.replace("\\", "/")
                     try:
-                        zipf.extract(file_info, target_dir)
+                        if not self._is_safe_zip_member(target_dir, name):
+                            self._update_progress(f"ERROR: Unsafe zip entry detected (path traversal): {name}")
+                            return False
+
+                        if name != file_info.filename:
+                            dest_path = target_dir / name
+                            dest_path.parent.mkdir(parents=True, exist_ok=True)
+                            with zipf.open(file_info) as source, open(dest_path, "wb") as dest:
+                                shutil.copyfileobj(source, dest)
+                        else:
+                            zipf.extract(file_info, target_dir)
                         extracted_files += 1
                         
-                        if file_info.filename.startswith('userdata/'):
-                            userdata_files += 1
-                        elif file_info.filename.startswith('addons/'):
-                            addons_files += 1
+                        if name.startswith('userdata/') and not userdata_banner_shown:
+                            self._update_progress("Restoring userdata files...")
+                            userdata_banner_shown = True
+                        elif name.startswith('addons/') and not addons_banner_shown:
+                            self._update_progress("Restoring addons files...")
+                            addons_banner_shown = True
                         
-                        # Update progress for every 100 files
-                        if extracted_files % 100 == 0:
-                            progress_msg = f"Restored {extracted_files}/{total_files} files..."
-                            if file_info.filename.startswith('addons/') and userdata_files > 0:
-                                self._update_progress("Restoring addons files...")
-                                userdata_files = 0  # Only show this message once
+                        # Update progress for every N files
+                        if extracted_files % progress_interval == 0 or extracted_files == total_files:
+                            self._update_progress(f"Extracting... {extracted_files}/{total_files} files restored")
                             
                     except Exception as e:
                         self._update_progress(f"Warning: Could not restore file {file_info.filename}: {e}")
+                        skipped_files_count += 1
                         continue
-                
+
+                self._update_progress(f"Extraction completed with {skipped_files_count} skipped files")
                 return True
                 
         except Exception as e:
@@ -535,7 +649,8 @@ class KodiBackupEngine:
             'userdata_files': 0,
             'addons_files': 0,
             'total_size': 0,
-            'error_message': ''
+            'error_message': '',
+            'error_logged': False
         }
         
         try:
@@ -543,28 +658,88 @@ class KodiBackupEngine:
             validation = self.validate_backup_file(backup_file_path)
             if not validation['valid']:
                 results['error_message'] = validation['error_message']
+                results['error_logged'] = validation.get('error_logged', False)
                 return results
             
             results['userdata_files'] = validation['userdata_files']
             results['addons_files'] = validation['addons_files']
             results['total_size'] = validation['total_size']
             
-            # Step 2: Clear existing directories
+            # Step 2: Validate restore target
+            target_dir = Path(target_directory)
+            if self._is_drive_root(target_dir):
+                msg = f"Refusing restore to drive root: {target_dir}"
+                results['error_message'] = msg
+                results['error_logged'] = True
+                self._update_progress(f"ERROR: {msg}")
+                return results
+
+            if not target_dir.exists():
+                target_dir.mkdir(parents=True, exist_ok=True)
+                self._update_progress(f"Restore target did not exist; created directory: {target_dir}")
+            
+            userdata_path = target_dir / "userdata"
+            addons_path = target_dir / "addons"
+            has_userdata = userdata_path.is_dir()
+            has_addons = addons_path.is_dir()
+            
+            if not (has_userdata and has_addons):
+                allowed_names = {".ds_store", "thumbs.db", "desktop.ini"}
+                try:
+                    entries = list(target_dir.iterdir())
+                except Exception as e:
+                    msg = f"Unable to read restore target: {e}"
+                    results['error_message'] = msg
+                    results['error_logged'] = True
+                    self._update_progress(f"ERROR: {msg}")
+                    return results
+                
+                if any(entry.name.lower() not in allowed_names for entry in entries):
+                    msg = ("Restore target is not a Kodi folder and is not empty. Choose an empty folder "
+                           "(new device) or a Kodi folder containing userdata/ and addons/.")
+                    results['error_message'] = msg
+                    results['error_logged'] = True
+                    self._update_progress(f"ERROR: {msg}")
+                    return results
+            
+            # Step 3: Validate zip entries for path traversal
+            try:
+                with zipfile.ZipFile(backup_file_path, 'r') as zipf:
+                    for member_name in zipf.namelist():
+                        if not self._is_safe_zip_member(target_dir, member_name):
+                            msg = f"Unsafe zip entry detected (path traversal): {member_name}"
+                            results['error_message'] = msg
+                            results['error_logged'] = True
+                            self._update_progress(f"ERROR: {msg}")
+                            return results
+            except Exception as e:
+                msg = f"Error validating backup file entries: {e}"
+                results['error_message'] = msg
+                results['error_logged'] = True
+                self._update_progress(f"ERROR: {msg}")
+                return results
+
+            # Step 4: Clear existing directories if restoring into Kodi folder
             self._update_progress("")
             self._update_progress("=" * 22 + " RESTORE PROCESS " + "=" * 22)
-            self._update_progress("Clearing existing Kodi data...")
             
-            if not self.clear_kodi_directories(target_directory):
-                results['error_message'] = "Failed to clear existing directories"
-                return results
+            if has_userdata and has_addons:
+                self._update_progress("Clearing existing Kodi data...")
+                if not self.clear_kodi_directories(target_directory):
+                    msg = "Failed to clear existing directories"
+                    results['error_message'] = msg
+                    self._update_progress(f"ERROR: {msg}")
+                    results['error_logged'] = True
+                    return results
             
-            # Step 3: Extract backup
+            # Step 5: Extract backup
             self._update_progress("")
             if not self.extract_backup_with_progress(backup_file_path, target_directory):
                 results['error_message'] = "Failed to extract backup archive"
+                results['error_logged'] = True
                 return results
             
-            # Step 4: Success
+            # Step 6: Success
             results['success'] = True
             self._update_progress("")
             self._update_progress("RESTORE COMPLETED SUCCESSFULLY")

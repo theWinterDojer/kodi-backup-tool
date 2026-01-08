@@ -17,7 +17,7 @@ Install Python 3.8+ and run from source (see Installation section below)
 - Windows executable available for easy deployment
 - GUI interface using CustomTkinter
 - Automated cache cleanup to reduce backup size
-- ZIP compression with configurable settings
+- ZIP compression (level 6)
 - Backup validation and restore functionality
 - Persistent configuration storage
 - Progress tracking and status reporting
@@ -71,8 +71,9 @@ The backup process performs the following steps:
 
 The restore process:
 1. Validates backup file structure
-2. Clears existing userdata and addons directories
-3. Extracts backup contents to target location
+2. Refuses drive-root targets and non-empty non-Kodi folders
+3. Clears existing userdata and addons directories (only when restoring to a Kodi folder)
+4. Extracts backup contents to target location (existing or new empty folder)
 
 ## Cache Cleanup
 
@@ -95,8 +96,8 @@ The restore process:
 
 ## File Format
 
-- Backup filename: `kodi.bkup_YYYY-MM-DD_LABEL.zip`
-- Compression: ZIP format with maximum compression level
+- Backup filename: `kodi.bkup_YYYY-MM-DD.zip` (no label) or `kodi.bkup_YYYY-MM-DD_LABEL.zip`
+- Compression: ZIP format with level 6 compresion (Speed increase for negligible space saving)
 - Archive structure preserves original directory hierarchy
 
 ## Configuration
@@ -131,6 +132,7 @@ pip install PyInstaller
 # Create executable (run on the target platform)
 python -m PyInstaller --onefile --windowed --icon=icon.ico --name "Kodi-Backup-Tool" main.py
 ```
+If `icon.ico` is missing, omit the `--icon` flag.
 
 **Important Notes:**
 - The executable will only run on the platform where it was built
@@ -152,5 +154,6 @@ The application includes validation for:
 - Backup file integrity checking
 - Path existence validation
 - Compression/extraction error handling
+- Unsafe zip entry (path traversal) detection
 
 All operations include comprehensive error reporting through the status interface.
