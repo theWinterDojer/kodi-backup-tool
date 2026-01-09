@@ -347,7 +347,7 @@ class KodiBackupEngine:
                 for _, _, files in os.walk(backup_dir_path):
                     total_files += len(files)
         
-        self._update_progress(f"Creating backup archive...")
+        self._update_progress("Creating backup archive...")
         self._update_progress(f"Output: {filename}")
         self._update_progress("")
         
@@ -522,7 +522,7 @@ class KodiBackupEngine:
                 results['total_size'] = sum(info.file_size for info in zipf.infolist() if not info.is_dir())
                 
                 results['valid'] = True
-                self._update_progress(f"✓ Backup file is valid")
+                self._update_progress("✓ Backup file is valid")
                 self._update_progress(f"✓ Contains userdata folder ({results['userdata_files']} files)")
                 self._update_progress(f"✓ Contains addons folder ({results['addons_files']} files)")
                 
@@ -583,7 +583,7 @@ class KodiBackupEngine:
                 total_files = sum(1 for zi in zipf.infolist() if not zi.is_dir())
                 
                 self._update_progress(f"Extracting {total_files} items...")
-                self._update_progress(f"Extracting backup archive...")
+                self._update_progress("Extracting backup archive...")
                 
                 extracted_files = 0
                 skipped_files_count = 0

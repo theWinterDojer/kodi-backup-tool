@@ -262,7 +262,7 @@ INSTRUCTIONS:
                 self.root.clipboard_clear()
                 self.root.clipboard_append(selected_text)
                 self.update_status("COPIED\n\nSelected text copied to clipboard")
-        except:
+        except Exception:
             self.update_status("COPY FAILED\n\nNo text selected. Select text first, then right-click → Copy Selected")
     
     def _copy_selected_text_keyboard(self):
@@ -272,7 +272,7 @@ INSTRUCTIONS:
             if selected_text:
                 self.root.clipboard_clear()
                 self.root.clipboard_append(selected_text)
-        except:
+        except Exception:
             pass  # Silently fail for keyboard shortcuts
     
     def _copy_all_text(self):
@@ -532,7 +532,7 @@ BACKUP DETAILS:
                 compression_ratio = (results['final_backup_size'] / results['size_after_cleanup']) * 100
                 summary_msg += f"\n• Compression Ratio: {compression_ratio:.1f}%"
             
-            summary_msg += f"\n\nYour Kodi backup is ready!"
+            summary_msg += "\n\nYour Kodi backup is ready!"
             
         else:
             summary_msg = f"""BACKUP FAILED
