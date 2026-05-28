@@ -43,7 +43,7 @@ class KodiBackupApp:
             pass
         
         # Initialize state
-        self.backup_in_progress = False
+        self.operation_in_progress = False
         
         # Configuration file path (in same directory as executable)
         # Handle both development and PyInstaller executable scenarios
@@ -324,6 +324,15 @@ INSTRUCTIONS:
     
     def _save_config(self):
         """Save current configuration to JSON file"""
+        return self._save_config_values(
+            self.kodi_path_entry.get().strip(),
+            self.backup_path_entry.get().strip(),
+            self.label_entry.get().strip(),
+            self.config.get('last_backup_file', '')
+        )
+
+    def _save_config_values(self, kodi_path, backup_path, backup_label, last_backup_file):
+        """Save explicit configuration values to JSON file."""
         try:
             # Only save default cleanup settings, not optional ones
             persistent_cleanup = {
@@ -332,16 +341,17 @@ INSTRUCTIONS:
             }
             
             config = {
-                'kodi_path': self.kodi_path_entry.get().strip(),
-                'backup_path': self.backup_path_entry.get().strip(),
-                'backup_label': self.label_entry.get().strip(),
-                'last_backup_file': self.config.get('last_backup_file', ''),
+                'kodi_path': kodi_path,
+                'backup_path': backup_path,
+                'backup_label': backup_label,
+                'last_backup_file': last_backup_file,
                 'cleanup_settings': persistent_cleanup
             }
             
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             
+            self.config = config
             return True
         except Exception as e:
             self.update_status(f"Error saving config: {e}")
@@ -416,15 +426,23 @@ INSTRUCTIONS:
         # Auto-scroll to bottom
         self.status_text.see("end")
     
-    def set_backup_button_state(self, enabled=True):
-        """Enable or disable backup button (thread-safe)"""
+    def set_operation_controls_state(self, enabled=True, active_action=None):
+        """Enable or disable action controls (thread-safe)."""
         state = "normal" if enabled else "disabled"
-        text = "Clean + Backup" if enabled else "Backing up..."
-        self.root.after_idle(lambda: self.backup_btn.configure(state=state, text=text))
+        backup_text = "Backing up..." if active_action == "backup" else "Clean + Backup"
+        restore_text = "Restoring..." if active_action == "restore" else "Restore"
+
+        def apply_state():
+            self.backup_btn.configure(state=state, text=backup_text)
+            self.restore_btn.configure(state=state, text=restore_text)
+            self.settings_btn.configure(state=state)
+
+        self.root.after_idle(apply_state)
     
     def start_backup(self):
         """Start the backup process"""
-        if self.backup_in_progress:
+        if self.operation_in_progress:
+            self.update_status("OPERATION IN PROGRESS\n\nPlease wait for the current operation to finish.")
             return
             
         kodi_path = self.kodi_path_entry.get().strip()
@@ -468,8 +486,8 @@ Please check the path and try again."""
             return
         
         # Start backup in separate thread
-        self.backup_in_progress = True
-        self.set_backup_button_state(False)
+        self.operation_in_progress = True
+        self.set_operation_controls_state(False, "backup")
         
         backup_thread = threading.Thread(
             target=self._perform_backup_thread,
@@ -494,33 +512,43 @@ INITIALIZING..."""
             # Create backup engine for this operation  
             backup_engine = KodiBackupEngine(self.update_status)
             
-            # Get cleanup settings (use current instance settings)
-            cleanup_settings = self.cleanup_settings
+            # Use a per-operation copy so later settings changes cannot affect this run.
+            cleanup_settings = dict(self.cleanup_settings)
             
             # Perform backup with status updates
             results = backup_engine.perform_full_backup(kodi_path, backup_path, label, None, cleanup_settings)
             
             # Display summary
-            self._display_backup_summary(results, backup_engine)
+            self._display_backup_summary(results, backup_engine, kodi_path, backup_path, label)
             
         except Exception as e:
             self.update_status(f"CRITICAL ERROR: {e}")
         finally:
             self._reset_ui_state()
     
-    def _display_backup_summary(self, results, backup_engine):
+    def _display_backup_summary(self, results, backup_engine, kodi_path, backup_path, label):
         """Display formatted backup results"""
         divider = "=" * 50
         self.update_status(divider)
         
         if results['success']:
             # Save the full path of the created backup file for restore defaults
-            backup_destination = self.backup_path_entry.get().strip()
-            full_backup_path = str(Path(backup_destination) / results['filename'])
-            self.config['last_backup_file'] = full_backup_path
-            self._save_config()  # Persist the last backup file immediately
+            full_backup_path = str(Path(backup_path) / results['filename'])
+            self.root.after_idle(
+                lambda: self._save_config_values(kodi_path, backup_path, label, full_backup_path)
+            )
             
-            summary_msg = f"""BACKUP COMPLETED SUCCESSFULLY
+            if results.get('warning_message'):
+                summary_msg = f"""BACKUP COMPLETED WITH WARNINGS
+
+BACKUP DETAILS:
+• Backup File: {results['filename']}
+• Original Size: {backup_engine.format_size(results['size_before_cleanup'])}
+• Space Freed: {backup_engine.format_size(results['space_freed'])}
+• Final Backup Size: {backup_engine.format_size(results['final_backup_size'])}
+• Skipped Files: {results['skipped_files_count']}"""
+            else:
+                summary_msg = f"""BACKUP COMPLETED SUCCESSFULLY
 
 BACKUP DETAILS:
 • Backup File: {results['filename']}
@@ -532,7 +560,10 @@ BACKUP DETAILS:
                 compression_ratio = (results['final_backup_size'] / results['size_after_cleanup']) * 100
                 summary_msg += f"\n• Compression Ratio: {compression_ratio:.1f}%"
             
-            summary_msg += "\n\nYour Kodi backup is ready!"
+            if results.get('warning_message'):
+                summary_msg += f"\n\n{results['warning_message']}"
+            else:
+                summary_msg += "\n\nYour Kodi backup is ready!"
             
         else:
             summary_msg = f"""BACKUP FAILED
@@ -547,11 +578,14 @@ Please check the error and try again."""
     
     def _reset_ui_state(self):
         """Reset UI to ready state"""
-        self.backup_in_progress = False
-        self.set_backup_button_state(True)
+        self.operation_in_progress = False
+        self.set_operation_controls_state(True)
     
     def start_restore(self):
         """Start the restore process"""
+        if self.operation_in_progress:
+            self.update_status("OPERATION IN PROGRESS\n\nPlease wait for the current operation to finish.")
+            return
         self._create_restore_dialog()
     
     def _create_restore_dialog(self):
@@ -754,6 +788,8 @@ Please check the error and try again."""
         
         # Close dialog and start restore process
         restore_window.destroy()
+        self.operation_in_progress = True
+        self.set_operation_controls_state(False, "restore")
         
         # Start restore in separate thread
         restore_thread = threading.Thread(
@@ -786,6 +822,8 @@ Validating backup file..."""
             
         except Exception as e:
             self.update_status(f"CRITICAL ERROR: {e}")
+        finally:
+            self._reset_ui_state()
     
     def _display_restore_summary(self, results, backup_file, target_dir, restore_engine):
         """Display formatted restore results matching specification"""

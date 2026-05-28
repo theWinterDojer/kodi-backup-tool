@@ -49,7 +49,7 @@ class KodiBackupEngine:
         userdata_path = kodi_dir / "userdata"
         addons_path = kodi_dir / "addons"
         
-        if not userdata_path.exists() or not addons_path.exists():
+        if not userdata_path.is_dir() or not addons_path.is_dir():
             self._update_progress("ERROR: Invalid Kodi directory: missing userdata/ and/or addons/")
             return False
             
@@ -315,7 +315,7 @@ class KodiBackupEngine:
         return cleaned if cleaned else "backup"
     
     def create_backup_archive(self, kodi_path: str, backup_destination: str, 
-                            filename: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[bool, int]:
+                            filename: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[bool, int, int]:
         """
         Create compressed backup archive of Kodi installation.
         
@@ -326,7 +326,7 @@ class KodiBackupEngine:
             progress_callback: Optional callback for progress updates (current_files, total_files)
             
         Returns:
-            Tuple of (success_boolean, total_uncompressed_size_bytes)
+            Tuple of (success_boolean, total_uncompressed_size_bytes, skipped_files_count)
         """
         kodi_dir = Path(kodi_path)
         backup_dir = Path(backup_destination)
@@ -397,11 +397,11 @@ class KodiBackupEngine:
                 for rel_path, error_message in skipped_examples:
                     self._update_progress(f"Skipped: {rel_path} ({error_message})")
             
-            return True, total_uncompressed_size
+            return True, total_uncompressed_size, skipped_files_count
             
         except Exception as e:
             self._update_progress(f"ERROR: Failed to create backup archive: {e}")
-            return False, 0
+            return False, 0, 0
     
     def perform_full_backup(self, kodi_path: str, backup_destination: str, 
                           label: str = "backup", archive_progress_callback: Optional[Callable[[int, int], None]] = None,
@@ -425,6 +425,8 @@ class KodiBackupEngine:
             'space_freed': 0,
             'final_backup_size': 0,
             'cleanup_results': {},
+            'skipped_files_count': 0,
+            'warning_message': '',
             'error_message': ''
         }
         
@@ -446,7 +448,10 @@ class KodiBackupEngine:
             
             # Step 4: Create backup archive (with size tracking)
             self._update_progress("=" * 22 + " BACKUP ARCHIVE " + "=" * 22)
-            backup_success, total_uncompressed_size = self.create_backup_archive(kodi_path, backup_destination, filename, archive_progress_callback)
+            backup_success, total_uncompressed_size, skipped_files_count = self.create_backup_archive(
+                kodi_path, backup_destination, filename, archive_progress_callback
+            )
+            results['skipped_files_count'] = skipped_files_count
             
             if backup_success:
                 # Get final backup file size
@@ -460,6 +465,11 @@ class KodiBackupEngine:
                 results['size_after_cleanup'] = total_uncompressed_size
                 
                 results['success'] = True
+                if skipped_files_count > 0:
+                    results['warning_message'] = (
+                        f"Backup completed but skipped {skipped_files_count} file(s). "
+                        "Review the skipped file messages above before relying on this backup."
+                    )
             else:
                 results['error_message'] = "Failed to create backup archive"
                 
@@ -627,6 +637,9 @@ class KodiBackupEngine:
                         continue
 
                 self._update_progress(f"Extraction completed with {skipped_files_count} skipped files")
+                if skipped_files_count > 0:
+                    self._update_progress("ERROR: Restore incomplete because one or more files could not be restored")
+                    return False
                 return True
                 
         except Exception as e:

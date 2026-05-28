@@ -38,6 +38,7 @@ venv.bak/
 *.swp
 *.swo
 *~
+agents.md
 
 # OS files
 .DS_Store
