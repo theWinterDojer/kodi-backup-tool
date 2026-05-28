@@ -19,6 +19,7 @@ Install Python 3.8+ and run from source (see Installation section below)
 - Automated cache cleanup to reduce backup size
 - ZIP compression (level 6)
 - Backup validation and restore functionality
+- Restore preview with backup file counts and size
 - Persistent configuration storage
 - Progress tracking and status reporting
 
@@ -65,9 +66,10 @@ The backup process performs the following steps:
 ### Restore Process
 
 1. Select backup ZIP file
-2. Select target Kodi directory
-3. Confirm overwrite operation
-4. Execute restore
+2. Review backup preview (userdata files, addons files, and total size)
+3. Select target Kodi directory
+4. Confirm overwrite operation
+5. Execute restore
 
 The restore process:
 1. Validates backup file structure
@@ -97,7 +99,7 @@ The restore process:
 ## File Format
 
 - Backup filename: `kodi.bkup_YYYY-MM-DD.zip` (no label) or `kodi.bkup_YYYY-MM-DD_LABEL.zip`
-- Compression: ZIP format with level 6 compresion (Speed increase for negligible space saving)
+- Compression: ZIP format with level 6 compression (speed increase for negligible space saving)
 - Archive structure preserves original directory hierarchy
 
 ## Configuration
@@ -151,7 +153,7 @@ If `icon.ico` is missing, omit the `--icon` flag.
 
 The application includes validation for:
 - Kodi directory structure verification
-- Backup file integrity checking
+- Backup ZIP structure validation
 - Path existence validation
 - Compression/extraction error handling
 - Unsafe zip entry (path traversal) detection
