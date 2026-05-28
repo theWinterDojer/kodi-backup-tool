@@ -24,7 +24,7 @@ class KodiBackupApp:
     def __init__(self):
         # Create main window
         self.root = ctk.CTk()
-        self.root.title("Kodi Backup Tool v1.3")
+        self.root.title("Kodi Backup Tool v1.4")
         self.root.geometry("550x730")
         self.root.minsize(500, 570)
         
@@ -592,16 +592,16 @@ Please check the error and try again."""
         """Create restore dialog window"""
         restore_window = ctk.CTkToplevel(self.root)
         restore_window.title("Restore Kodi Backup")
-        restore_window.geometry("450x350")
-        restore_window.minsize(450, 350)
+        restore_window.geometry("450x430")
+        restore_window.minsize(450, 430)
         restore_window.transient(self.root)
         restore_window.grab_set()  # Make it modal
         
         # Center the window
         restore_window.update_idletasks()
         x = (restore_window.winfo_screenwidth() // 2) - (450 // 2)
-        y = (restore_window.winfo_screenheight() // 2) - (350 // 2)
-        restore_window.geometry(f"450x350+{x}+{y}")
+        y = (restore_window.winfo_screenheight() // 2) - (430 // 2)
+        restore_window.geometry(f"450x430+{x}+{y}")
         
         # Main content area
         content_frame = ctk.CTkFrame(restore_window)
@@ -634,6 +634,8 @@ Please check the error and try again."""
             font=ctk.CTkFont(size=12)
         )
         self.restore_backup_entry.pack(side="left", fill="x", expand=True, padx=(8, 5), pady=8)
+        self.restore_backup_entry.bind("<FocusOut>", lambda _event: self._update_restore_preview())
+        self.restore_backup_entry.bind("<Return>", lambda _event: self._update_restore_preview())
         
         if default_backup:
             self.restore_backup_entry.insert(0, default_backup)
@@ -646,6 +648,25 @@ Please check the error and try again."""
             command=lambda: self._browse_backup_file(restore_window)
         )
         backup_browse_btn.pack(side="right", padx=(0, 8), pady=8)
+
+        preview_label = ctk.CTkLabel(
+            content_frame,
+            text="Backup Preview:",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        preview_label.pack(anchor="w", padx=10, pady=(0, 5))
+
+        self.restore_preview_label = ctk.CTkLabel(
+            content_frame,
+            text="Select a backup file to preview its contents.",
+            font=ctk.CTkFont(size=12),
+            justify="left",
+            anchor="w",
+            wraplength=390,
+            text_color="gray80"
+        )
+        self.restore_preview_label.pack(fill="x", padx=10, pady=(0, 10))
+        self._update_restore_preview()
         
         # Target directory selection
         target_label = ctk.CTkLabel(
@@ -740,6 +761,7 @@ Please check the error and try again."""
         if file_path:
             self.restore_backup_entry.delete(0, 'end')
             self.restore_backup_entry.insert(0, file_path)
+            self._update_restore_preview()
     
     def _browse_restore_directory(self, parent_window):
         """Browse for restore target directory"""
@@ -753,6 +775,40 @@ Please check the error and try again."""
         if directory:
             self.restore_target_entry.delete(0, 'end')
             self.restore_target_entry.insert(0, directory)
+
+    def _update_restore_preview(self):
+        """Update restore dialog preview from selected backup metadata."""
+        if not hasattr(self, 'restore_preview_label'):
+            return
+
+        backup_file = self.restore_backup_entry.get().strip()
+        if not backup_file:
+            self.restore_preview_label.configure(
+                text="Select a backup file to preview its contents.",
+                text_color="gray80"
+            )
+            return
+
+        preview_engine = KodiBackupEngine(lambda _: None)
+        validation = preview_engine.validate_backup_file(backup_file)
+
+        if validation['valid']:
+            backup_path = Path(backup_file)
+            self.restore_preview_label.configure(
+                text=(
+                    f"File: {backup_path.name}\n"
+                    f"userdata: {validation['userdata_files']:,} files | "
+                    f"addons: {validation['addons_files']:,} files | "
+                    f"Size: {preview_engine.format_size(validation['total_size'])}"
+                ),
+                text_color="gray90"
+            )
+        else:
+            error_message = validation['error_message'] or "Backup file could not be previewed."
+            self.restore_preview_label.configure(
+                text=f"Preview unavailable: {error_message}",
+                text_color="#ff7777"
+            )
     
     def _confirm_restore(self, restore_window):
         """Validate paths and confirm restore operation"""

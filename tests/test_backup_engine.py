@@ -20,6 +20,46 @@ CLEANUP_OFF = {
 
 
 class KodiBackupEngineTests(unittest.TestCase):
+    def test_validate_backup_file_reports_preview_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            backup_zip = base / "valid.zip"
+            with zipfile.ZipFile(backup_zip, "w") as z:
+                z.writestr("userdata/settings.xml", "user")
+                z.writestr("userdata/profiles.xml", "profiles")
+                z.writestr("addons/plugin/addon.xml", "addon")
+
+            result = KodiBackupEngine(lambda _: None).validate_backup_file(str(backup_zip))
+
+            self.assertTrue(result["valid"])
+            self.assertEqual(result["userdata_files"], 2)
+            self.assertEqual(result["addons_files"], 1)
+            self.assertEqual(result["total_size"], len("user") + len("profiles") + len("addon"))
+
+    def test_validate_backup_file_rejects_missing_required_folders(self):
+        with tempfile.TemporaryDirectory() as td:
+            backup_zip = Path(td) / "invalid.zip"
+            with zipfile.ZipFile(backup_zip, "w") as z:
+                z.writestr("other/file.txt", "x")
+
+            result = KodiBackupEngine(lambda _: None).validate_backup_file(str(backup_zip))
+
+            self.assertFalse(result["valid"])
+            self.assertEqual(
+                result["error_message"],
+                "Backup file does not contain required directories: userdata/ and/or addons/"
+            )
+
+    def test_validate_backup_file_rejects_corrupt_zip(self):
+        with tempfile.TemporaryDirectory() as td:
+            backup_zip = Path(td) / "corrupt.zip"
+            backup_zip.write_text("not a zip archive", encoding="utf-8")
+
+            result = KodiBackupEngine(lambda _: None).validate_backup_file(str(backup_zip))
+
+            self.assertFalse(result["valid"])
+            self.assertEqual(result["error_message"], "File is not a valid ZIP archive")
+
     def test_backup_rejects_userdata_and_addons_files(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
